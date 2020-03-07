@@ -115,6 +115,8 @@ namespace aclogview.Tools.Scrapers
 
         class BiotaEx
         {
+            public string LoginCharSetName;
+
             public Position LastPosition;
             public uint LastPositionTSec;
 
@@ -190,6 +192,32 @@ namespace aclogview.Tools.Scrapers
                             loginEvent = new LoginEvent(fileName, record.tsSec, message.gid);
                             loginEvent.Biota.SetProperty(ACE.Entity.Enum.Properties.PropertyString.PCAPRecordedServerName, serverName, rwLock, out _);
                             continue;
+                        }
+
+                        if (messageCode == (uint)PacketOpcode.Evt_Login__CharacterSet_ID) // 0xF658
+                        {
+                            var message = CM_Login.Login__CharacterSet.read(binaryReader);
+
+                            // Update the global biota infos
+                            lock (biotasByServer)
+                            {
+                                if (!biotasByServer.TryGetValue(serverName, out var biotaServer))
+                                {
+                                    biotaServer = new Dictionary<uint, BiotaEx>();
+                                    biotasByServer[serverName] = biotaServer;
+                                }
+
+                                foreach (var character in message.set_)
+                                {
+                                    if (!biotaServer.TryGetValue(character.gid_, out var biotaEx))
+                                    {
+                                        biotaEx = new BiotaEx();
+                                        biotaServer[character.gid_] = biotaEx;
+
+                                        biotaEx.LoginCharSetName = character.name_.m_buffer;
+                                    }
+                                }
+                            }
                         }
 
                         if (messageCode == (uint)PacketOpcode.Evt_Physics__CreateObject_ID) // 0xF745
@@ -704,14 +732,18 @@ namespace aclogview.Tools.Scrapers
                     if (playerLoginsByServer.TryGetValue(server.Key, out var playerLoginServer) && playerLoginServer.ContainsKey(biotaEx.Key))
                         continue;
 
-                    if (biotaEx.Value.LastCreateObject == null)
+                    if (biotaEx.Value.LoginCharSetName == null && biotaEx.Value.LastCreateObject == null)
                         continue;
 
                     var biota = new Biota();
 
                     biota.Id = biotaEx.Key;
 
-                    ACEBiotaCreator.Update(biotaEx.Value.LastCreateObject, biota, rwLock, true);
+                    if (biotaEx.Value.LoginCharSetName != null)
+                        biota.SetProperty(ACE.Entity.Enum.Properties.PropertyString.Name, biotaEx.Value.LoginCharSetName, rwLock, out _);
+
+                    if (biotaEx.Value.LastCreateObject != null)
+                        ACEBiotaCreator.Update(biotaEx.Value.LastCreateObject, biota, rwLock, true);
 
                     if (biotaEx.Value.LastAppraisalProfile != null)
                         ACEBiotaCreator.Update(biotaEx.Value.LastAppraisalProfile, biota, rwLock);
@@ -736,6 +768,9 @@ namespace aclogview.Tools.Scrapers
                             ACEBiotaCreator.Update(ACE.Entity.Enum.Properties.PositionType.Location, biotaEx.Value.LastPosition, biota, rwLock);
 
                         biota.WeenieType = (int)ACEBiotaCreator.DetermineWeenieType(biota, rwLock);
+
+                        if (biota.WeenieType == (int)WeenieType.Undef_WeenieType)
+                            biota.WeenieType = (int)WeenieType.Creature_WeenieType;
 
                         SetBiotaPopulatedCollections(biota);
 
